@@ -23,7 +23,7 @@ type FreeScenarioState = {
 
 const QUALITY_ORDER = ['official', 'primary', 'reported', 'industry', 'heuristic', 'assumption'];
 const FREE_SCENARIO_DEFAULTS: FreeScenarioState = {
-  title: 'Free Scenario Builder',
+  title: 'Build Your Own Scenario',
   expression: '',
   resultLabel: 'Custom result',
   resultUnits: 'context-dependent units',
@@ -863,7 +863,7 @@ onBeforeUnmount(() => {
           <div v-if="activeView === 'scenarios' || !props.showInputLibrary" class="page-toolbar-bottom">
             <p class="toolbar-note">
               <strong>{{ filteredScenarios.length }}</strong>
-              curated {{ pluralize(filteredScenarios.length, 'scenario') }} shown, plus one free scenario builder.
+              curated {{ pluralize(filteredScenarios.length, 'scenario') }} shown, plus one open-ended builder at the end.
               Inputs are shared across cards, so one edit updates every calculation that uses that variable.
             </p>
 
@@ -933,11 +933,11 @@ onBeforeUnmount(() => {
             <article id="scenario-freeform" class="scenario-card free-scenario-card">
               <div class="scenario-card-header free-scenario-header">
                 <div class="scenario-intro">
-                  <div class="scenario-category-label">Free exploration</div>
+                  <div class="scenario-category-label">Open-ended</div>
                   <h3>{{ freeScenario.title || FREE_SCENARIO_DEFAULTS.title }}</h3>
                   <p class="scenario-description-text">
-                    Build any formula from the shared input library. Use the inserter below for input tokens,
-                    then combine them with numbers, operators, and parentheses.
+                    Build a custom formula from the shared input library when the curated scenarios do not
+                    quite match the question you want to ask.
                   </p>
 
                   <div class="free-scenario-metadata">
@@ -947,7 +947,7 @@ onBeforeUnmount(() => {
                         v-model="freeScenario.title"
                         class="form-control form-control-sm"
                         type="text"
-                        placeholder="Free Scenario Builder"
+                        placeholder="Build Your Own Scenario"
                       />
                     </label>
 
@@ -1173,7 +1173,7 @@ onBeforeUnmount(() => {
               v-for="scenario in filteredScenarios"
               :id="`scenario-${scenario.id}`"
               :key="scenario.id"
-              class="scenario-card"
+              class="scenario-card scenario-card-curated"
             >
               <div class="scenario-card-header">
                 <div class="scenario-intro">

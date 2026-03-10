@@ -485,6 +485,10 @@ input[type="number"] {
   gap: 1.5rem;
 }
 
+.scenario-card-curated {
+  order: 1;
+}
+
 .scenario-card {
   padding: 1.35rem;
 }
@@ -522,9 +526,10 @@ input[type="number"] {
 }
 
 .free-scenario-card {
+  order: 2;
   background:
-    linear-gradient(180deg, rgba(43, 76, 111, 0.05), rgba(255, 255, 255, 0)),
-    rgba(255, 255, 255, 0.86);
+    linear-gradient(180deg, rgba(43, 76, 111, 0.035), rgba(255, 255, 255, 0)),
+    rgba(255, 255, 255, 0.84);
 }
 
 .free-scenario-header {
