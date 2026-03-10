@@ -76,8 +76,7 @@ If your PR addresses an existing issue, link it in the pull request description.
 This repo now supports a split deployment flow:
 
 - `gh-pages` is the pinned/stable GitHub Pages branch for `https://exploringai.org`
-- `main` deploys to a Cloudflare Pages dev site through `wrangler`
-- pull requests targeting `main` also get Cloudflare preview deployments when the PR branch lives in this repo
+- Cloudflare Pages dev deploys are uploaded manually from your machine with `wrangler`
 
 ### GitHub Pages Promotion
 
@@ -93,19 +92,7 @@ In GitHub repository settings, keep Pages configured to deploy from the `gh-page
 
 ### Cloudflare Pages Dev Deploys
 
-Cloudflare deploys are handled by the `Deploy Cloudflare Pages` workflow and use `wrangler pages deploy`.
-
-Required GitHub secrets:
-
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
-
-Recommended GitHub repository variables:
-
-- `CLOUDFLARE_PAGES_PROJECT_NAME`
-  Use something like `exploringai-dev`
-- `CLOUDFLARE_DEV_SITE_URL`
-  Use the canonical dev URL for build metadata, such as `https://dev.exploringai.org`
+Cloudflare dev deploys are manual and use `wrangler pages deploy` locally.
 
 One-time Cloudflare setup:
 
@@ -116,4 +103,17 @@ One-time Cloudflare setup:
 2. Optionally attach a custom domain such as `dev.exploringai.org`.
 3. Keep the dev domain out of search indexing; this repo builds Cloudflare deploys with `noindex`.
 
-Once those secrets and variables are set, pushes to `main` and internal PRs to `main` will deploy automatically.
+Typical local deploy flow:
+
+```bash
+SITE_URL=https://dev.exploringai.org npm --prefix website run build:dev
+npm --prefix website run cf:deploy -- --project-name exploringai-dev --branch main
+```
+
+If you want a preview-style deploy without replacing the `main` branch deployment, use a different branch name:
+
+```bash
+npm --prefix website run cf:deploy -- --project-name exploringai-dev --branch your-name-preview
+```
+
+No GitHub Cloudflare secrets or CI configuration are required for this local-only flow.
