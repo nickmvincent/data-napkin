@@ -1,32 +1,50 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import InputComparisonFigure from './InputComparisonFigure.vue';
+import InputReferenceCharts from './InputReferenceCharts.vue';
 import type { Input, Scenario } from '../lib/calculations';
 import {
   createCalculationFunction,
   evaluateMathExpression,
   formatLabel,
-  formatOperation,
   formatValue,
   humanReadable,
   updateCalculations,
 } from '../lib/calculations';
+import { INPUT_UNITS, SCENARIO_CATEGORIES } from '../lib/content-vocab.js';
+import { INPUT_FOCUS_GROUPS, getInputFocusGroup, getInputFocusGroupKey } from '../lib/input-groups';
 
 type ViewMode = 'scenarios' | 'inputs';
 type FreeScenarioState = {
   title: string;
+  description: string;
+  category: string;
   expression: string;
   resultLabel: string;
   resultUnits: string;
   showCalcDetails: boolean;
 };
+type GroupedInputEntry = {
+  key: string;
+  input: Input;
+};
+type GroupedInputSection = {
+  key: string;
+  chipLabel: string;
+  prompt: string;
+  label: string;
+  description: string;
+  entries: GroupedInputEntry[];
+};
 
 const QUALITY_ORDER = ['official', 'primary', 'reported', 'industry', 'heuristic', 'assumption'];
 const FREE_SCENARIO_DEFAULTS: FreeScenarioState = {
   title: 'Build Your Own Scenario',
+  description: '',
+  category: SCENARIO_CATEGORIES[0],
   expression: '',
   resultLabel: 'Custom result',
-  resultUnits: 'context-dependent units',
+  resultUnits: 'dollars',
   showCalcDetails: false,
 };
 const FREE_SCENARIO_SNIPPETS = [
@@ -57,6 +75,7 @@ const selectedInputKey = ref<string | null>(null);
 const selectedScenario = ref('All');
 const activeView = ref<ViewMode>(props.showInputLibrary ? props.initialView : 'scenarios');
 const inputSearch = ref('');
+const selectedInputFocus = ref('All');
 const selectedSourceQuality = ref('All');
 const selectedInputType = ref('All');
 const featuredOnly = ref(false);
@@ -71,10 +90,12 @@ const freeScenarioInputPicker = ref('');
 const freeScenarioExpressionField = ref<HTMLTextAreaElement | null>(null);
 
 const shareButtonLabel = ref('Copy Share Link');
+const freeScenarioCopyLabel = ref('Copy Scenario Markdown');
 const hasMounted = ref(false);
 const isApplyingUrlState = ref(false);
 
 let shareResetTimeout: ReturnType<typeof setTimeout> | null = null;
+let freeScenarioCopyResetTimeout: ReturnType<typeof setTimeout> | null = null;
 
 const selectedInputDetails = computed(() => {
   return selectedInputKey.value ? inputs.value[selectedInputKey.value] : null;
@@ -120,6 +141,11 @@ const sortedInputs = computed(() => {
     });
 });
 
+const inputFocusOptions = computed(() => {
+  const found = new Set(sortedInputs.value.map(({ input }) => getInputFocusGroupKey(input)));
+  return INPUT_FOCUS_GROUPS.filter((group) => found.has(group.key));
+});
+
 const inputTypeOptions = computed(() => {
   const types = [...new Set(sortedInputs.value.map(({ input }) => input.variable_type))];
   return types.sort((a, b) => formatLabel(a).localeCompare(formatLabel(b)));
@@ -151,6 +177,10 @@ const filteredInputs = computed(() => {
       return false;
     }
 
+    if (selectedInputFocus.value !== 'All' && getInputFocusGroupKey(input) !== selectedInputFocus.value) {
+      return false;
+    }
+
     if (!query) {
       return true;
     }
@@ -172,6 +202,22 @@ const filteredInputs = computed(() => {
 
     return searchIndex.includes(query);
   });
+});
+
+const groupedFilteredInputs = computed(() => {
+  const grouped = new Map<string, GroupedInputEntry[]>();
+
+  filteredInputs.value.forEach((entry) => {
+    const group = getInputFocusGroup(entry.input);
+    const existing = grouped.get(group.key) ?? [];
+    existing.push(entry);
+    grouped.set(group.key, existing);
+  });
+
+  return INPUT_FOCUS_GROUPS.map((group) => ({
+    ...group,
+    entries: grouped.get(group.key) ?? [],
+  })).filter((group) => group.entries.length);
 });
 
 const changedInputKeys = computed(() => {
@@ -202,15 +248,28 @@ const calcDetailsState = computed(() => {
 const hasNonDefaultFills = computed(() => changedFillState.value.length > 0);
 const freeScenarioEvaluation = computed(() => evaluateMathExpression(freeScenario.value.expression, inputs.value));
 const freeScenarioReferencedInputKeys = computed(() => {
-  return freeScenarioEvaluation.value.usedVariables.filter((key) => Boolean(inputs.value[key]));
+  return [...new Set(freeScenarioEvaluation.value.usedVariables.filter((key) => Boolean(inputs.value[key])))];
 });
 const freeScenarioState = computed(() => [
   freeScenario.value.title,
+  freeScenario.value.description,
+  freeScenario.value.category,
   freeScenario.value.expression,
   freeScenario.value.resultLabel,
   freeScenario.value.resultUnits,
   freeScenario.value.showCalcDetails ? '1' : '0',
 ].join('|'));
+const canCopyFreeScenarioMarkdown = computed(() => {
+  return Boolean(
+    freeScenario.value.expression.trim() &&
+    freeScenario.value.category &&
+    !freeScenarioEvaluation.value.error
+  );
+});
+const freeScenarioSuggestedFilename = computed(() => `${slugifyScenarioId(
+  freeScenario.value.title || FREE_SCENARIO_DEFAULTS.title
+)}.md`);
+const freeScenarioMarkdown = computed(() => buildFreeScenarioMarkdown());
 
 function normalizeFieldNumber(value: number): string {
   if (!Number.isFinite(value)) return '';
@@ -265,6 +324,74 @@ function formatConfidence(confidence?: number | null): string {
   }
 
   return `${Math.round(confidence * 100)}% confidence`;
+}
+
+function slugifyScenarioId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'new-scenario';
+}
+
+function yamlQuote(value: string): string {
+  return JSON.stringify(value);
+}
+
+function yamlBlock(value: string): string {
+  const lines = (value.trim() || 'TODO').split('\n');
+  return `>-\n${lines.map((line) => `  ${line}`).join('\n')}`;
+}
+
+function buildFreeScenarioMarkdown(): string {
+  const title = (freeScenario.value.title || FREE_SCENARIO_DEFAULTS.title).trim();
+  const description = (
+    freeScenario.value.description.trim() ||
+    `TODO: describe what ${title} estimates and why these inputs are the right ones.`
+  );
+  const formula = freeScenario.value.expression.trim();
+  const resultLabel = (freeScenario.value.resultLabel || FREE_SCENARIO_DEFAULTS.resultLabel).trim();
+  const resultUnits = (freeScenario.value.resultUnits || FREE_SCENARIO_DEFAULTS.resultUnits).trim();
+  const category = freeScenario.value.category || FREE_SCENARIO_DEFAULTS.category;
+  const referencedInputs = freeScenarioReferencedInputKeys.value
+    .map((inputKey) => `- ${inputs.value[inputKey]?.title || formatLabel(inputKey)}: \`${inputKey}\``)
+    .join('\n');
+
+  return [
+    '<!-- Suggested file: content/scenarios/' + freeScenarioSuggestedFilename.value + ' -->',
+    '---',
+    `title: ${yamlQuote(title)}`,
+    `description: ${yamlBlock(description)}`,
+    `formula: ${yamlBlock(formula || 'TODO: add a formula')}`,
+    `result_label: ${yamlQuote(resultLabel)}`,
+    `result_units: ${yamlQuote(resultUnits)}`,
+    `category: ${yamlQuote(category)}`,
+    `date_added: ${yamlQuote(new Date().toISOString())}`,
+    'visibility: public',
+    'type: ScenarioCalculation',
+    '---',
+    '',
+    `# ${title}`,
+    '',
+    '## Description',
+    '',
+    description,
+    '',
+    '## Formula',
+    '',
+    '```text',
+    formula || 'TODO: add a formula',
+    '```',
+    '',
+    '## Referenced inputs',
+    '',
+    referencedInputs || '- TODO: add one or more shared input tokens.',
+    '',
+    '## Result',
+    '',
+    `The ${resultLabel} is calculated in ${resultUnits}.`,
+  ].join('\n');
 }
 
 function pluralize(count: number, singular: string, plural = `${singular}s`) {
@@ -433,6 +560,12 @@ function insertSelectedFreeScenarioInput() {
 }
 
 function resetFreeScenario() {
+  if (freeScenarioCopyResetTimeout) {
+    clearTimeout(freeScenarioCopyResetTimeout);
+    freeScenarioCopyResetTimeout = null;
+  }
+
+  freeScenarioCopyLabel.value = 'Copy Scenario Markdown';
   freeScenario.value = { ...FREE_SCENARIO_DEFAULTS };
 }
 
@@ -535,8 +668,28 @@ function getFillOptions(variable: string) {
     }));
 }
 
+function groupInputKeys(inputKeys: string[]): GroupedInputSection[] {
+  const grouped = new Map<string, GroupedInputEntry[]>();
+
+  inputKeys.forEach((key) => {
+    const input = inputs.value[key];
+    if (!input) return;
+
+    const group = getInputFocusGroup(input);
+    const existing = grouped.get(group.key) ?? [];
+    existing.push({ key, input });
+    grouped.set(group.key, existing);
+  });
+
+  return INPUT_FOCUS_GROUPS.map((group) => ({
+    ...group,
+    entries: grouped.get(group.key) ?? [],
+  })).filter((group) => group.entries.length);
+}
+
 function resetInputFilters() {
   inputSearch.value = '';
+  selectedInputFocus.value = 'All';
   selectedSourceQuality.value = 'All';
   selectedInputType.value = 'All';
   featuredOnly.value = false;
@@ -596,6 +749,10 @@ function syncUrlState() {
     params.set('q', inputSearch.value.trim());
   }
 
+  if (props.showInputLibrary && selectedInputFocus.value !== 'All') {
+    params.set('focus', selectedInputFocus.value);
+  }
+
   if (props.showInputLibrary && selectedSourceQuality.value !== 'All') {
     params.set('quality', selectedSourceQuality.value);
   }
@@ -638,6 +795,14 @@ function syncUrlState() {
     params.set('custom_title', freeScenario.value.title);
   }
 
+  if (freeScenario.value.description.trim()) {
+    params.set('custom_desc', freeScenario.value.description);
+  }
+
+  if (freeScenario.value.category !== FREE_SCENARIO_DEFAULTS.category) {
+    params.set('custom_category', freeScenario.value.category);
+  }
+
   if (freeScenario.value.resultLabel !== FREE_SCENARIO_DEFAULTS.resultLabel) {
     params.set('custom_label', freeScenario.value.resultLabel);
   }
@@ -666,6 +831,9 @@ function applyUrlStateFromLocation() {
     selectedScenario.value = category && uniqueCategories.value.includes(category) ? category : 'All';
 
     inputSearch.value = props.showInputLibrary ? (params.get('q') ?? '') : '';
+    selectedInputFocus.value = props.showInputLibrary && inputFocusOptions.value.some((group) => group.key === params.get('focus'))
+      ? (params.get('focus') as string)
+      : 'All';
     selectedSourceQuality.value = props.showInputLibrary && sourceQualityOptions.value.includes(params.get('quality') ?? '')
       ? (params.get('quality') as string)
       : 'All';
@@ -675,6 +843,11 @@ function applyUrlStateFromLocation() {
     featuredOnly.value = props.showInputLibrary && params.get('featured') === '1';
     freeScenario.value = {
       title: params.get('custom_title') ?? FREE_SCENARIO_DEFAULTS.title,
+      description: params.get('custom_desc') ?? FREE_SCENARIO_DEFAULTS.description,
+      category:
+        SCENARIO_CATEGORIES.includes(params.get('custom_category') ?? '')
+          ? (params.get('custom_category') as string)
+          : FREE_SCENARIO_DEFAULTS.category,
       expression: params.get('custom_expr') ?? FREE_SCENARIO_DEFAULTS.expression,
       resultLabel: params.get('custom_label') ?? FREE_SCENARIO_DEFAULTS.resultLabel,
       resultUnits: params.get('custom_units') ?? FREE_SCENARIO_DEFAULTS.resultUnits,
@@ -740,6 +913,28 @@ async function copyShareLink() {
   }, 1800);
 }
 
+async function copyFreeScenarioMarkdown() {
+  if (!canCopyFreeScenarioMarkdown.value) {
+    freeScenarioCopyLabel.value = 'Fix Formula First';
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(freeScenarioMarkdown.value);
+    freeScenarioCopyLabel.value = 'Markdown Copied';
+  } catch {
+    freeScenarioCopyLabel.value = 'Copy Failed';
+  }
+
+  if (freeScenarioCopyResetTimeout) {
+    clearTimeout(freeScenarioCopyResetTimeout);
+  }
+
+  freeScenarioCopyResetTimeout = window.setTimeout(() => {
+    freeScenarioCopyLabel.value = 'Copy Scenario Markdown';
+  }, 1800);
+}
+
 function handlePopState() {
   applyUrlStateFromLocation();
 }
@@ -751,6 +946,7 @@ watch(
     selectedInputKey,
     rightPanelOpen,
     inputSearch,
+    selectedInputFocus,
     selectedSourceQuality,
     selectedInputType,
     featuredOnly,
@@ -789,6 +985,10 @@ onBeforeUnmount(() => {
   if (shareResetTimeout) {
     clearTimeout(shareResetTimeout);
   }
+
+  if (freeScenarioCopyResetTimeout) {
+    clearTimeout(freeScenarioCopyResetTimeout);
+  }
 });
 </script>
 
@@ -800,11 +1000,11 @@ onBeforeUnmount(() => {
       <main class="main-content">
         <header v-if="props.showHeader" id="headerContent" class="page-header">
           <p class="eyebrow">Interactive calculator</p>
-          <h1>Napkin Math for Training Data Value</h1>
+          <h1>Exploring AI: Data Napkin Math</h1>
           <p>
-            Napkin math, back-of-the-envelope estimates, and ballpark figures: this interactive page
-            explores order-of-magnitude estimates for important data value questions. How will the
-            proceeds and benefits of AI be distributed?
+            Interactive napkin math, back-of-the-envelope estimates, and ballpark figures for training-data
+            value, compensation, and distribution questions. How will the proceeds and benefits of AI be
+            distributed?
           </p>
         </header>
 
@@ -865,6 +1065,7 @@ onBeforeUnmount(() => {
               <strong>{{ filteredScenarios.length }}</strong>
               curated {{ pluralize(filteredScenarios.length, 'scenario') }} shown, plus one open-ended builder at the end.
               Inputs are shared across cards, so one edit updates every calculation that uses that variable.
+              Within each card, assumptions are grouped by question type.
             </p>
 
             <div class="chip-row">
@@ -882,6 +1083,30 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-else class="library-toolbar">
+            <div class="input-focus-toolbar">
+              <span class="input-focus-label">Browse by question</span>
+              <div class="input-focus-chip-row">
+                <button
+                  class="input-focus-chip"
+                  :class="{ active: selectedInputFocus === 'All' }"
+                  type="button"
+                  @click="selectedInputFocus = 'All'"
+                >
+                  Show everything
+                </button>
+                <button
+                  v-for="group in inputFocusOptions"
+                  :key="group.key"
+                  class="input-focus-chip"
+                  :class="{ active: selectedInputFocus === group.key }"
+                  type="button"
+                  @click="selectedInputFocus = group.key"
+                >
+                  {{ group.prompt }}
+                </button>
+              </div>
+            </div>
+
             <label class="search-field">
               <span class="visually-hidden">Search inputs</span>
               <input
@@ -933,7 +1158,7 @@ onBeforeUnmount(() => {
             <article id="scenario-freeform" class="scenario-card free-scenario-card">
               <div class="scenario-card-header free-scenario-header">
                 <div class="scenario-intro">
-                  <div class="scenario-category-label">Open-ended</div>
+                  <div class="scenario-category-label">{{ freeScenario.category || 'Open-ended' }}</div>
                   <h3>{{ freeScenario.title || FREE_SCENARIO_DEFAULTS.title }}</h3>
                   <p class="scenario-description-text">
                     Build a custom formula from the shared input library when the curated scenarios do not
@@ -965,10 +1190,24 @@ onBeforeUnmount(() => {
                       <span>Units</span>
                       <input
                         v-model="freeScenario.resultUnits"
+                        list="scenario-unit-options"
                         class="form-control form-control-sm"
                         type="text"
-                        placeholder="context-dependent units"
+                        placeholder="dollars"
                       />
+                    </label>
+
+                    <label class="free-scenario-field">
+                      <span>Saved category</span>
+                      <select v-model="freeScenario.category" class="form-select form-select-sm">
+                        <option
+                          v-for="category in SCENARIO_CATEGORIES"
+                          :key="category"
+                          :value="category"
+                        >
+                          {{ category }}
+                        </option>
+                      </select>
                     </label>
                   </div>
                 </div>
@@ -1032,6 +1271,16 @@ onBeforeUnmount(() => {
                 </div>
 
                 <label class="free-scenario-formula-field">
+                  <span>Description for saved scenario</span>
+                  <textarea
+                    v-model="freeScenario.description"
+                    class="form-control"
+                    rows="3"
+                    placeholder="Explain what this scenario estimates and which assumptions matter most."
+                  ></textarea>
+                </label>
+
+                <label class="free-scenario-formula-field">
                   <span>Formula</span>
                   <textarea
                     ref="freeScenarioExpressionField"
@@ -1045,82 +1294,104 @@ onBeforeUnmount(() => {
                 <p class="free-scenario-helper">
                   Supported syntax: numbers, parentheses, and <code>+</code>, <code>-</code>, <code>*</code>,
                   <code>/</code>, <code>^</code>. Input tokens use curly braces, like
-                  <code>{{ '{yearly_revenue__openai__dollars}' }}</code>.
+                  <code>{{ '{yearly_revenue__openai__dollars}' }}</code>. When you like the draft, copy
+                  markdown for <code>content/scenarios/{{ freeScenarioSuggestedFilename }}</code>.
                 </p>
               </div>
 
-              <div v-if="freeScenarioReferencedInputKeys.length" class="scenario-input-grid">
+              <div v-if="freeScenarioReferencedInputKeys.length" class="scenario-input-group-list">
                 <div
-                  v-for="inputKey in freeScenarioReferencedInputKeys"
-                  :key="inputKey"
-                  class="scenario-input-card"
-                  :class="{ changed: isInputChanged(inputKey) }"
+                  v-for="group in groupInputKeys(freeScenarioReferencedInputKeys)"
+                  :key="`free-${group.key}`"
+                  class="scenario-input-group"
                 >
-                  <div class="scenario-input-header">
+                  <div class="scenario-input-group-header">
                     <div>
-                      <h4>{{ inputs[inputKey]?.title || formatLabel(inputKey) }}</h4>
-                      <p class="scenario-input-summary">
-                        {{ inputs[inputKey]?.summary || inputs[inputKey]?.importanceReason }}
-                      </p>
+                      <span class="scenario-input-group-kicker">{{ group.prompt }}</span>
+                      <h4>{{ group.label }}</h4>
                     </div>
-
-                    <div class="scenario-input-badges">
-                      <span class="input-quality-badge">
-                        {{ formatSourceQuality(inputs[inputKey]?.sourceQuality) }}
-                      </span>
-                      <span v-if="isInputChanged(inputKey)" class="changed-badge">Modified</span>
-                    </div>
+                    <p>{{ group.description }}</p>
                   </div>
 
-                  <label class="scenario-input-label">
-                    {{ inputs[inputKey]?.display_units }}
-                  </label>
-
-                  <InputComparisonFigure
-                    v-if="inputs[inputKey]?.comparisonImage"
-                    :comparison-image="inputs[inputKey]?.comparisonImage"
-                  />
-
-                  <div class="scenario-input-controls">
-                    <input
-                      type="number"
-                      class="form-control"
-                      :value="getFieldValue(inputKey)"
-                      :step="getInputStep(inputs[inputKey])"
-                      :min="inputs[inputKey]?.min ?? undefined"
-                      :max="inputs[inputKey]?.max ?? undefined"
-                      @focus="beginEditingValue(inputKey)"
-                      @input="updateDraftValue(inputKey, ($event.target as HTMLInputElement).value)"
-                      @blur="commitDraftValue(inputKey)"
-                      @keydown="handleValueKeydown(inputKey, $event)"
-                    />
-                    <button class="btn btn-outline-secondary" type="button" @click="adjustValue(inputKey, 0.1)">
-                      x0.1
-                    </button>
-                    <button class="btn btn-outline-secondary" type="button" @click="adjustValue(inputKey, 10)">
-                      x10
-                    </button>
-                    <button
-                      class="btn btn-outline-secondary"
-                      type="button"
-                      :disabled="!isInputChanged(inputKey)"
-                      @click="resetValue(inputKey)"
+                  <div class="scenario-input-grid">
+                    <div
+                      v-for="entry in group.entries"
+                      :key="entry.key"
+                      class="scenario-input-card"
+                      :class="{ changed: isInputChanged(entry.key) }"
                     >
-                      Reset
-                    </button>
-                    <button class="btn btn-secondary" type="button" @click="showDetails(inputKey)">
-                      Inspect
-                    </button>
-                  </div>
+                      <div class="scenario-input-header">
+                        <div>
+                          <h4>{{ entry.input.title || formatLabel(entry.key) }}</h4>
+                          <p class="scenario-input-summary">
+                            {{ entry.input.summary || entry.input.importanceReason }}
+                          </p>
+                        </div>
 
-                  <div class="scenario-input-footer">
-                    <span v-if="inputs[inputKey]?.usedIn?.length" class="input-usage">
-                      Used in {{ inputs[inputKey]?.usedIn?.length }}
-                      {{ pluralize(inputs[inputKey]?.usedIn?.length || 0, 'scenario') }}
-                    </span>
-                    <span v-if="inputs[inputKey]?.confidence !== undefined" class="confidence-text">
-                      {{ formatConfidence(inputs[inputKey]?.confidence) }}
-                    </span>
+                        <div class="scenario-input-badges">
+                          <span class="input-quality-badge">
+                            {{ formatSourceQuality(entry.input.sourceQuality) }}
+                          </span>
+                          <span v-if="isInputChanged(entry.key)" class="changed-badge">Modified</span>
+                        </div>
+                      </div>
+
+                      <label class="scenario-input-label">
+                        {{ entry.input.display_units }}
+                      </label>
+
+                      <InputComparisonFigure
+                        v-if="entry.input.comparisonImage"
+                        :comparison-image="entry.input.comparisonImage"
+                      />
+
+                      <InputReferenceCharts
+                        v-if="entry.input.referenceCharts?.length"
+                        :reference-charts="entry.input.referenceCharts"
+                      />
+
+                      <div class="scenario-input-controls">
+                        <input
+                          type="number"
+                          class="form-control"
+                          :value="getFieldValue(entry.key)"
+                          :step="getInputStep(entry.input)"
+                          :min="entry.input.min ?? undefined"
+                          :max="entry.input.max ?? undefined"
+                          @focus="beginEditingValue(entry.key)"
+                          @input="updateDraftValue(entry.key, ($event.target as HTMLInputElement).value)"
+                          @blur="commitDraftValue(entry.key)"
+                          @keydown="handleValueKeydown(entry.key, $event)"
+                        />
+                        <button class="btn btn-outline-secondary" type="button" @click="adjustValue(entry.key, 0.1)">
+                          x0.1
+                        </button>
+                        <button class="btn btn-outline-secondary" type="button" @click="adjustValue(entry.key, 10)">
+                          x10
+                        </button>
+                        <button
+                          class="btn btn-outline-secondary"
+                          type="button"
+                          :disabled="!isInputChanged(entry.key)"
+                          @click="resetValue(entry.key)"
+                        >
+                          Reset
+                        </button>
+                        <button class="btn btn-secondary" type="button" @click="showDetails(entry.key)">
+                          Inspect
+                        </button>
+                      </div>
+
+                      <div class="scenario-input-footer">
+                        <span v-if="entry.input.usedIn?.length" class="input-usage">
+                          Used in {{ entry.input.usedIn?.length }}
+                          {{ pluralize(entry.input.usedIn?.length || 0, 'scenario') }}
+                        </span>
+                        <span v-if="entry.input.confidence !== undefined" class="confidence-text">
+                          {{ formatConfidence(entry.input.confidence) }}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1130,6 +1401,14 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="scenario-card-footer">
+                <button
+                  class="btn btn-outline-primary btn-sm"
+                  type="button"
+                  :disabled="!canCopyFreeScenarioMarkdown"
+                  @click="copyFreeScenarioMarkdown"
+                >
+                  {{ freeScenarioCopyLabel }}
+                </button>
                 <button
                   class="btn btn-outline-info btn-sm"
                   type="button"
@@ -1144,6 +1423,10 @@ onBeforeUnmount(() => {
                 <div class="operation-description">
                   <strong>Formula</strong>
                   <pre class="formula-preview">{{ freeScenario.expression.trim() || 'No formula yet' }}</pre>
+                </div>
+                <div>
+                  <strong>Suggested file</strong>
+                  <span class="text-primary">content/scenarios/{{ freeScenarioSuggestedFilename }}</span>
                 </div>
                 <div v-if="freeScenarioReferencedInputKeys.length" class="calculation-inputs">
                   <strong>Current inputs</strong>
@@ -1213,78 +1496,99 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <div class="scenario-input-grid">
+              <div class="scenario-input-group-list">
                 <div
-                  v-for="inputKey in scenario.inputs"
-                  :key="inputKey"
-                  class="scenario-input-card"
-                  :class="{ changed: isInputChanged(inputKey) }"
+                  v-for="group in groupInputKeys(scenario.inputs)"
+                  :key="`${scenario.id}-${group.key}`"
+                  class="scenario-input-group"
                 >
-                  <div class="scenario-input-header">
+                  <div class="scenario-input-group-header">
                     <div>
-                      <h4>{{ inputs[inputKey]?.title || formatLabel(inputKey) }}</h4>
-                      <p class="scenario-input-summary">
-                        {{ inputs[inputKey]?.summary || inputs[inputKey]?.importanceReason }}
-                      </p>
+                      <span class="scenario-input-group-kicker">{{ group.prompt }}</span>
+                      <h4>{{ group.label }}</h4>
                     </div>
-
-                    <div class="scenario-input-badges">
-                      <span class="input-quality-badge">
-                        {{ formatSourceQuality(inputs[inputKey]?.sourceQuality) }}
-                      </span>
-                      <span v-if="isInputChanged(inputKey)" class="changed-badge">Modified</span>
-                    </div>
+                    <p>{{ group.description }}</p>
                   </div>
 
-                  <label class="scenario-input-label">
-                    {{ inputs[inputKey]?.display_units }}
-                  </label>
-
-                  <InputComparisonFigure
-                    v-if="inputs[inputKey]?.comparisonImage"
-                    :comparison-image="inputs[inputKey]?.comparisonImage"
-                  />
-
-                  <div class="scenario-input-controls">
-                    <input
-                      type="number"
-                      class="form-control"
-                      :value="getFieldValue(inputKey)"
-                      :step="getInputStep(inputs[inputKey])"
-                      :min="inputs[inputKey]?.min ?? undefined"
-                      :max="inputs[inputKey]?.max ?? undefined"
-                      @focus="beginEditingValue(inputKey)"
-                      @input="updateDraftValue(inputKey, ($event.target as HTMLInputElement).value)"
-                      @blur="commitDraftValue(inputKey)"
-                      @keydown="handleValueKeydown(inputKey, $event)"
-                    />
-                    <button class="btn btn-outline-secondary" type="button" @click="adjustValue(inputKey, 0.1)">
-                      x0.1
-                    </button>
-                    <button class="btn btn-outline-secondary" type="button" @click="adjustValue(inputKey, 10)">
-                      x10
-                    </button>
-                    <button
-                      class="btn btn-outline-secondary"
-                      type="button"
-                      :disabled="!isInputChanged(inputKey)"
-                      @click="resetValue(inputKey)"
+                  <div class="scenario-input-grid">
+                    <div
+                      v-for="entry in group.entries"
+                      :key="entry.key"
+                      class="scenario-input-card"
+                      :class="{ changed: isInputChanged(entry.key) }"
                     >
-                      Reset
-                    </button>
-                    <button class="btn btn-secondary" type="button" @click="showDetails(inputKey)">
-                      Inspect
-                    </button>
-                  </div>
+                      <div class="scenario-input-header">
+                        <div>
+                          <h4>{{ entry.input.title || formatLabel(entry.key) }}</h4>
+                          <p class="scenario-input-summary">
+                            {{ entry.input.summary || entry.input.importanceReason }}
+                          </p>
+                        </div>
 
-                  <div class="scenario-input-footer">
-                    <span v-if="inputs[inputKey]?.usedIn?.length" class="input-usage">
-                      Used in {{ inputs[inputKey]?.usedIn?.length }}
-                      {{ pluralize(inputs[inputKey]?.usedIn?.length || 0, 'scenario') }}
-                    </span>
-                    <span v-if="inputs[inputKey]?.confidence !== undefined" class="confidence-text">
-                      {{ formatConfidence(inputs[inputKey]?.confidence) }}
-                    </span>
+                        <div class="scenario-input-badges">
+                          <span class="input-quality-badge">
+                            {{ formatSourceQuality(entry.input.sourceQuality) }}
+                          </span>
+                          <span v-if="isInputChanged(entry.key)" class="changed-badge">Modified</span>
+                        </div>
+                      </div>
+
+                      <label class="scenario-input-label">
+                        {{ entry.input.display_units }}
+                      </label>
+
+                      <InputComparisonFigure
+                        v-if="entry.input.comparisonImage"
+                        :comparison-image="entry.input.comparisonImage"
+                      />
+
+                      <InputReferenceCharts
+                        v-if="entry.input.referenceCharts?.length"
+                        :reference-charts="entry.input.referenceCharts"
+                      />
+
+                      <div class="scenario-input-controls">
+                        <input
+                          type="number"
+                          class="form-control"
+                          :value="getFieldValue(entry.key)"
+                          :step="getInputStep(entry.input)"
+                          :min="entry.input.min ?? undefined"
+                          :max="entry.input.max ?? undefined"
+                          @focus="beginEditingValue(entry.key)"
+                          @input="updateDraftValue(entry.key, ($event.target as HTMLInputElement).value)"
+                          @blur="commitDraftValue(entry.key)"
+                          @keydown="handleValueKeydown(entry.key, $event)"
+                        />
+                        <button class="btn btn-outline-secondary" type="button" @click="adjustValue(entry.key, 0.1)">
+                          x0.1
+                        </button>
+                        <button class="btn btn-outline-secondary" type="button" @click="adjustValue(entry.key, 10)">
+                          x10
+                        </button>
+                        <button
+                          class="btn btn-outline-secondary"
+                          type="button"
+                          :disabled="!isInputChanged(entry.key)"
+                          @click="resetValue(entry.key)"
+                        >
+                          Reset
+                        </button>
+                        <button class="btn btn-secondary" type="button" @click="showDetails(entry.key)">
+                          Inspect
+                        </button>
+                      </div>
+
+                      <div class="scenario-input-footer">
+                        <span v-if="entry.input.usedIn?.length" class="input-usage">
+                          Used in {{ entry.input.usedIn?.length }}
+                          {{ pluralize(entry.input.usedIn?.length || 0, 'scenario') }}
+                        </span>
+                        <span v-if="entry.input.confidence !== undefined" class="confidence-text">
+                          {{ formatConfidence(entry.input.confidence) }}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1302,8 +1606,8 @@ onBeforeUnmount(() => {
               <div v-if="scenario.showCalcDetails" class="calc-details">
                 <h4>Calculation Details</h4>
                 <div class="operation-description">
-                  <strong>Operation</strong>
-                  <span>{{ formatOperation(scenario.operations, inputs) }}</span>
+                  <strong>Formula</strong>
+                  <pre class="formula-preview">{{ scenario.formula }}</pre>
                 </div>
                 <div class="calculation-inputs">
                   <strong>Current inputs</strong>
@@ -1323,123 +1627,148 @@ onBeforeUnmount(() => {
               </div>
             </article>
           </div>
+          <datalist id="scenario-unit-options">
+            <option v-for="unit in INPUT_UNITS" :key="unit" :value="unit"></option>
+          </datalist>
         </section>
 
         <section v-else-if="props.showInputLibrary" id="inputLibrary">
           <h2 class="section-title">Inputs Library</h2>
           <p class="section-description">
             Search, filter, and edit the shared assumptions. Each change immediately updates every
-            scenario that depends on that input.
+            scenario that depends on that input, and the library is grouped around the kinds of
+            questions people usually start with.
           </p>
 
-          <div v-if="filteredInputs.length" class="inputs-library">
-            <article
-              v-for="entry in filteredInputs"
-              :key="entry.key"
-              class="input-library-card"
-              :class="{ featured: entry.input.featured }"
+          <div v-if="groupedFilteredInputs.length" class="inputs-library-group-list">
+            <section
+              v-for="group in groupedFilteredInputs"
+              :key="group.key"
+              class="inputs-library-group"
             >
-              <div class="input-library-header">
-                <div class="input-rank">
-                  <span class="input-rank-number">#{{ entry.input.importanceRank || '-' }}</span>
-                  <span class="input-rank-label">Importance</span>
+              <div class="inputs-library-group-header">
+                <div>
+                  <span class="scenario-input-group-kicker">{{ group.prompt }}</span>
+                  <h3>{{ group.label }}</h3>
                 </div>
-
-                <div class="input-library-badges">
-                  <span class="input-quality-badge">
-                    {{ formatSourceQuality(entry.input.sourceQuality) }}
-                  </span>
-                  <span v-if="entry.input.featured" class="featured-badge">Featured</span>
-                </div>
+                <p>{{ group.description }}</p>
               </div>
 
-              <h3>{{ entry.input.title || formatLabel(entry.key) }}</h3>
-              <p class="input-library-summary">
-                {{ entry.input.summary || entry.input.importanceReason }}
-              </p>
-
-              <InputComparisonFigure
-                v-if="entry.input.comparisonImage"
-                :comparison-image="entry.input.comparisonImage"
-              />
-
-              <div class="input-library-value-row">
-                <input
-                  type="number"
-                  class="form-control"
-                  :value="getFieldValue(entry.key)"
-                  :step="getInputStep(entry.input)"
-                  :min="entry.input.min ?? undefined"
-                  :max="entry.input.max ?? undefined"
-                  @focus="beginEditingValue(entry.key)"
-                  @input="updateDraftValue(entry.key, ($event.target as HTMLInputElement).value)"
-                  @blur="commitDraftValue(entry.key)"
-                  @keydown="handleValueKeydown(entry.key, $event)"
-                />
-                <span class="input-library-units">{{ entry.input.display_units }}</span>
-              </div>
-
-              <div class="input-library-quick-actions">
-                <button class="btn btn-outline-secondary btn-sm" type="button" @click="adjustValue(entry.key, 0.1)">
-                  x0.1
-                </button>
-                <button class="btn btn-outline-secondary btn-sm" type="button" @click="adjustValue(entry.key, 10)">
-                  x10
-                </button>
-                <button
-                  class="btn btn-outline-secondary btn-sm"
-                  type="button"
-                  :disabled="!isInputChanged(entry.key)"
-                  @click="resetValue(entry.key)"
+              <div class="inputs-library">
+                <article
+                  v-for="entry in group.entries"
+                  :key="entry.key"
+                  class="input-library-card"
+                  :class="{ featured: entry.input.featured }"
                 >
-                  Reset
-                </button>
-                <button class="btn btn-outline-primary btn-sm" type="button" @click="showDetails(entry.key)">
-                  Inspect
-                </button>
-                <a
-                  v-if="entry.input.source_url"
-                  class="btn btn-outline-secondary btn-sm"
-                  :href="entry.input.source_url"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Source
-                </a>
+                  <div class="input-library-header">
+                    <div class="input-rank">
+                      <span class="input-rank-number">#{{ entry.input.importanceRank || '-' }}</span>
+                      <span class="input-rank-label">Importance</span>
+                    </div>
+
+                    <div class="input-library-badges">
+                      <span class="input-quality-badge">
+                        {{ formatSourceQuality(entry.input.sourceQuality) }}
+                      </span>
+                      <span v-if="entry.input.featured" class="featured-badge">Featured</span>
+                    </div>
+                  </div>
+
+                  <h3>{{ entry.input.title || formatLabel(entry.key) }}</h3>
+                  <p class="input-library-summary">
+                    {{ entry.input.summary || entry.input.importanceReason }}
+                  </p>
+
+                  <InputComparisonFigure
+                    v-if="entry.input.comparisonImage"
+                    :comparison-image="entry.input.comparisonImage"
+                  />
+
+                  <InputReferenceCharts
+                    v-if="entry.input.referenceCharts?.length"
+                    :reference-charts="entry.input.referenceCharts"
+                  />
+
+                  <div class="input-library-value-row">
+                    <input
+                      type="number"
+                      class="form-control"
+                      :value="getFieldValue(entry.key)"
+                      :step="getInputStep(entry.input)"
+                      :min="entry.input.min ?? undefined"
+                      :max="entry.input.max ?? undefined"
+                      @focus="beginEditingValue(entry.key)"
+                      @input="updateDraftValue(entry.key, ($event.target as HTMLInputElement).value)"
+                      @blur="commitDraftValue(entry.key)"
+                      @keydown="handleValueKeydown(entry.key, $event)"
+                    />
+                    <span class="input-library-units">{{ entry.input.display_units }}</span>
+                  </div>
+
+                  <div class="input-library-quick-actions">
+                    <button class="btn btn-outline-secondary btn-sm" type="button" @click="adjustValue(entry.key, 0.1)">
+                      x0.1
+                    </button>
+                    <button class="btn btn-outline-secondary btn-sm" type="button" @click="adjustValue(entry.key, 10)">
+                      x10
+                    </button>
+                    <button
+                      class="btn btn-outline-secondary btn-sm"
+                      type="button"
+                      :disabled="!isInputChanged(entry.key)"
+                      @click="resetValue(entry.key)"
+                    >
+                      Reset
+                    </button>
+                    <button class="btn btn-outline-primary btn-sm" type="button" @click="showDetails(entry.key)">
+                      Inspect
+                    </button>
+                    <a
+                      v-if="entry.input.source_url"
+                      class="btn btn-outline-secondary btn-sm"
+                      :href="entry.input.source_url"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Source
+                    </a>
+                  </div>
+
+                  <div class="input-library-meta">
+                    <span>{{ formatLabel(entry.input.variable_type) }}</span>
+                    <span v-if="entry.input.entity">{{ formatLabel(entry.input.entity) }}</span>
+                    <span v-if="entry.input.confidence !== undefined">{{ formatConfidence(entry.input.confidence) }}</span>
+                  </div>
+
+                  <p v-if="entry.input.importanceReason" class="input-library-reason">
+                    <strong>Why it matters:</strong> {{ entry.input.importanceReason }}
+                  </p>
+
+                  <div class="input-library-source">
+                    <strong>{{ entry.input.sourceName || 'Source status' }}</strong>
+                    <span v-if="entry.input.lastReviewed">Reviewed {{ entry.input.lastReviewed }}</span>
+                  </div>
+
+                  <p v-if="entry.input.sourceNote" class="input-library-note">
+                    {{ entry.input.sourceNote }}
+                  </p>
+
+                  <div v-if="entry.input.usedIn?.length" class="input-library-usage">
+                    <span class="usage-label">Used in</span>
+                    <button
+                      v-for="scenario in entry.input.usedIn"
+                      :key="scenario.id"
+                      class="scenario-link-chip"
+                      type="button"
+                      @click="jumpToScenario(scenario.id, scenario.category)"
+                    >
+                      {{ scenario.title }}
+                    </button>
+                  </div>
+                </article>
               </div>
-
-              <div class="input-library-meta">
-                <span>{{ formatLabel(entry.input.variable_type) }}</span>
-                <span v-if="entry.input.entity">{{ formatLabel(entry.input.entity) }}</span>
-                <span v-if="entry.input.confidence !== undefined">{{ formatConfidence(entry.input.confidence) }}</span>
-              </div>
-
-              <p v-if="entry.input.importanceReason" class="input-library-reason">
-                <strong>Why it matters:</strong> {{ entry.input.importanceReason }}
-              </p>
-
-              <div class="input-library-source">
-                <strong>{{ entry.input.sourceName || 'Source status' }}</strong>
-                <span v-if="entry.input.lastReviewed">Reviewed {{ entry.input.lastReviewed }}</span>
-              </div>
-
-              <p v-if="entry.input.sourceNote" class="input-library-note">
-                {{ entry.input.sourceNote }}
-              </p>
-
-              <div v-if="entry.input.usedIn?.length" class="input-library-usage">
-                <span class="usage-label">Used in</span>
-                <button
-                  v-for="scenario in entry.input.usedIn"
-                  :key="scenario.id"
-                  class="scenario-link-chip"
-                  type="button"
-                  @click="jumpToScenario(scenario.id, scenario.category)"
-                >
-                  {{ scenario.title }}
-                </button>
-              </div>
-            </article>
+            </section>
           </div>
 
           <div v-else class="empty-state">
@@ -1497,6 +1826,12 @@ onBeforeUnmount(() => {
               <p class="inspector-summary">
                 {{ selectedInputDetails.summary || selectedInputDetails.importanceReason }}
               </p>
+
+              <InputReferenceCharts
+                v-if="selectedInputDetails.referenceCharts?.length"
+                :reference-charts="selectedInputDetails.referenceCharts"
+                :default-open="true"
+              />
 
               <div class="detail-item">
                 <span class="detail-label">Current value</span>

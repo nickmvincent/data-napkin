@@ -4,15 +4,47 @@ import NapkinApp from '../components/NapkinApp.vue';
 import Layout from '../layouts/Layout.astro';
 import type { Input, Scenario } from '../lib/calculations';
 import { createCalculationFunction, formatValue, humanReadable } from '../lib/calculations';
+import { extractInputTokens } from '../lib/formulas.js';
+import { INPUT_FOCUS_GROUPS, getInputFocusGroupKey } from '../lib/input-groups';
+
+function getEntryStem(entryId: string) {
+  const segments = entryId.split('/').filter(Boolean);
+  return segments[segments.length - 1] || entryId;
+}
 
 const inputEntries = await getCollection('inputs');
 const scenarioEntries = await getCollection('scenarios');
+const blogEntries = await getCollection('blogs');
+const keyPaperEntries = await getCollection('keyPapers');
+const askEntries = await getCollection('asks');
+
+const BLOG_STATUS_LABELS = {
+  draft: 'Draft',
+  in_progress: 'Essay in progress',
+  published: 'Published',
+} as const;
+
+const KEY_PAPER_KIND_LABELS = {
+  position: 'Position',
+  policy: 'Policy',
+  empirical: 'Empirical',
+  legal: 'Legal',
+  tracker: 'Tracker',
+} as const;
+
+function sortByOrder<T extends { data: { sort_order?: number | null; title: string } }>(entries: T[]) {
+  return [...entries].sort((left, right) => {
+    const orderDelta = (left.data.sort_order ?? Number.MAX_SAFE_INTEGER) - (right.data.sort_order ?? Number.MAX_SAFE_INTEGER);
+    if (orderDelta !== 0) return orderDelta;
+    return left.data.title.localeCompare(right.data.title);
+  });
+}
 
 const scenarioReferences = scenarioEntries.map((entry) => ({
-  id: entry.id,
+  id: getEntryStem(entry.id),
   title: entry.data.title,
   category: entry.data.category,
-  inputVariables: entry.data.input_variables,
+  inputVariables: entry.data.input_variables?.length ? entry.data.input_variables : extractInputTokens(entry.data.formula),
 }));
 
 const inputUsage = new Map<string, { id: string; title: string; category: string }[]>();
@@ -31,14 +63,20 @@ for (const scenario of scenarioReferences) {
 const inputs: Record<string, Input> = {};
 for (const entry of inputEntries) {
   const { data } = entry;
-  inputs[data.variable_name] = {
+  const variableName = data.variable_name ?? getEntryStem(entry.id);
+
+  if (inputs[variableName]) {
+    throw new Error(`Duplicate input id "${variableName}" found while building the input library.`);
+  }
+
+  inputs[variableName] = {
     id: entry.id,
     title: data.title,
     value: data.value,
     default_value: data.value,
     scale: data.scale || 1,
     display_units: data.display_units,
-    variable_name: data.variable_name,
+    variable_name: variableName,
     variable_type: data.variable_type,
     entity: data.entity ?? undefined,
     units: data.units,
@@ -65,20 +103,33 @@ for (const entry of inputEntries) {
           label: data.comparisonImage.label ?? undefined,
         }
       : undefined,
-    usedIn: inputUsage.get(data.variable_name) ?? [],
+    referenceCharts: data.referenceCharts?.map((chart) => ({
+      title: chart.title,
+      description: chart.description ?? undefined,
+      scale: chart.scale ?? undefined,
+      bars: chart.bars.map((bar) => ({
+        label: bar.label,
+        value: bar.value,
+        displayValue: bar.displayValue ?? undefined,
+        note: bar.note ?? undefined,
+        highlight: bar.highlight ?? false,
+      })),
+    })),
+    usedIn: inputUsage.get(variableName) ?? [],
   };
 }
 
 const scenarios: Scenario[] = scenarioEntries.map((entry) => {
   const { data } = entry;
+  const inputVariables = data.input_variables?.length ? data.input_variables : extractInputTokens(data.formula);
+
   return {
-    id: entry.id,
+    id: getEntryStem(entry.id),
     title: data.title,
     description: data.description,
-    input_variables: data.input_variables,
-    inputs: data.input_variables,
-    calculation_type: data.calculation_type,
-    operations: data.operations,
+    input_variables: inputVariables,
+    inputs: inputVariables,
+    formula: data.formula,
     result_label: data.result_label,
     result_units: data.result_units,
     category: data.category,
@@ -108,24 +159,31 @@ function formatInputNumber(input: Input) {
   return formatter.format(displayedValue);
 }
 
-const simpleInputIds = [
+const landingInputIds = [
+  'yearly_revenue__openai__dollars',
+  'deal_value__reddit_google__dollars',
   'dataset_size__llama3__tokens',
   'dataset_size__olmo3__tokens',
   'training_detail__openai__words_per_token',
   'dataset_size__hle__questions',
   'deal_group_size__reddit__daily_active_users',
-  'group_size__usa__people',
   'group_size__world__people',
   'post_training_size__tulu_3__sft_examples',
+  'pretraining_composition__dolma_v1_6__web_percent',
 ];
 
-const simpleInputs = simpleInputIds
+const landingInputs = landingInputIds
   .map((id) => inputs[id])
   .filter(Boolean)
   .map((input) => ({
     ...input,
     displayValue: formatInputNumber(input),
   }));
+
+const landingInputGroups = INPUT_FOCUS_GROUPS.map((group) => ({
+  ...group,
+  inputs: landingInputs.filter((input) => getInputFocusGroupKey(input) === group.key),
+})).filter((group) => group.inputs.length);
 
 function formatMultiple(value?: number | null) {
   if (value === null || value === undefined || !Number.isFinite(value)) return null;
@@ -171,25 +229,45 @@ const blogPlaceholder = {
       : null,
 };
 
-const curatedPaperHighlights = [
-  {
-    title: 'A Sustainable AI Economy Needs Data Deals That Work for Generators',
-    anchor: 'Ruoxi Jia et al., NeurIPS 2025 position paper',
-    blurb:
-      'Position paper and companion explorer on 73 public AI data deals, useful for grounding questions about opacity, royalties, and bargaining power in the data market.',
-    quality: 'primary',
-    links: [
-      {
-        href: 'https://neurips.cc/virtual/2025/loc/san-diego/poster/121926',
-        label: 'NeurIPS poster',
-      },
-      {
-        href: 'https://research.brickroad.network/neurips2025-data-deals',
-        label: 'Data deals tracker',
-      },
-    ],
-  },
-];
+const featuredBlogEntry = sortByOrder(
+  blogEntries.filter((entry) => (entry.data.visibility ?? 'public') === 'public')
+)[0];
+
+const featuredBlog = featuredBlogEntry
+  ? {
+      title: featuredBlogEntry.data.title,
+      excerpt: featuredBlogEntry.data.excerpt,
+      statusLabel: BLOG_STATUS_LABELS[featuredBlogEntry.data.status],
+    }
+  : {
+      title: 'Commissioning a new frontier dataset versus current AI revenue',
+      excerpt:
+        'A working note on the tension between replacement-cost estimates for commissioned training data and the current revenue anchors for frontier AI companies.',
+      statusLabel: BLOG_STATUS_LABELS.in_progress,
+    };
+
+const curatedPaperHighlights = sortByOrder(
+  keyPaperEntries.filter((entry) => (entry.data.visibility ?? 'public') === 'public')
+).map((entry) => ({
+  title: entry.data.title,
+  anchor: entry.data.anchor,
+  blurb: entry.data.relevance,
+  quality: KEY_PAPER_KIND_LABELS[entry.data.kind],
+  links: [
+    ...(entry.data.source_url
+      ? [
+          {
+            href: entry.data.source_url,
+            label: 'Read source',
+          },
+        ]
+      : []),
+    ...((entry.data.links ?? []).map((link) => ({
+      href: link.href,
+      label: link.label,
+    }))),
+  ],
+}));
 
 const paperHighlightIds = [
   'dataset_size__hle__questions',
@@ -226,25 +304,21 @@ const watchIndicators = [
   'Inference price movement across flagship and mini model tiers.',
 ];
 
-const ourAsks = [
-  'Publish deal values and renewal terms in ways researchers and journalists can cite.',
-  'Break out AI-specific revenue from total company revenue whenever possible.',
-  'Disclose pretraining size, post-training size, and mix composition as first-class metrics.',
-  'Make contributor compensation for benchmarks and labeling more legible.',
-  'Treat data access, licensing, and opt-out infrastructure as measurable public-interest indicators.',
-];
+const ourAsks = sortByOrder(
+  askEntries.filter((entry) => (entry.data.visibility ?? 'public') === 'public')
+).map((entry) => entry.data.summary || entry.data.title);
 ---
 
-<Layout title="Data Napkin Math">
+<Layout title="Exploring AI: Data Napkin Math">
   <main class="home-shell">
     <section class="landing-hero">
       <div class="hero-copy">
         <p class="section-kicker">Interactive calculator</p>
-        <h1>Napkin Math for Training Data Value</h1>
+        <h1>Exploring AI: Data Napkin Math</h1>
         <p class="hero-text">
-          Napkin math, back-of-the-envelope estimates, and ballpark figures: this interactive page
-          explores order-of-magnitude estimates for important data value questions. How will the
-          proceeds and benefits of AI be distributed?
+          Interactive napkin math, back-of-the-envelope estimates, and ballpark figures for training-data
+          value, compensation, and distribution questions. How will the proceeds and benefits of AI be
+          distributed?
         </p>
         <div class="hero-actions">
           <a class="hero-link hero-link-primary" href="/#calculations">Open calculator</a>
@@ -255,20 +329,6 @@ const ourAsks = [
         </div>
       </div>
 
-      <div class="hero-stats">
-        <div class="hero-stat">
-          <strong>{simpleInputs.length}</strong>
-          <span>anchor inputs</span>
-        </div>
-        <div class="hero-stat">
-          <strong>{scenarios.length}</strong>
-          <span>live scenarios</span>
-        </div>
-        <div class="hero-stat">
-          <strong>{allPaperHighlights.length}</strong>
-          <span>highlighted sources</span>
-        </div>
-      </div>
     </section>
 
     <section id="inputs" class="landing-section section-inputs">
@@ -276,31 +336,53 @@ const ourAsks = [
         <p class="section-kicker">Section 1</p>
         <h2>Inputs</h2>
         <p>
-          Start with plain numbers from public sources. These are the least interpretive pieces of the site:
-          counts, rates, sizes, and benchmark totals that anchor the rest of the math.
+          Start with plain numbers from public sources, grouped by the kind of question you want to ask.
+          Jump straight to money, training scale, people, or data mix instead of scanning one long list.
         </p>
       </div>
 
-      <div class="number-grid">
-        {simpleInputs.map((input) => (
-          <article class="number-card">
-            <div class="number-card-top">
-              <span class="mini-badge">{input.sourceQuality === 'primary' ? 'Primary' : 'Official'}</span>
-              {input.lastReviewed && <span class="number-meta">Reviewed {input.lastReviewed}</span>}
+      <div class="input-topic-nav" aria-label="Input categories">
+        {landingInputGroups.map((group) => (
+          <a class="input-topic-link" href={`#input-topic-${group.key}`}>
+            {group.prompt}
+          </a>
+        ))}
+      </div>
+
+      <div class="input-topic-list">
+        {landingInputGroups.map((group) => (
+          <section class="input-topic-section" id={`input-topic-${group.key}`}>
+            <div class="input-topic-header">
+              <div>
+                <p class="section-kicker input-topic-kicker">{group.prompt}</p>
+                <h3>{group.label}</h3>
+              </div>
+              <p>{group.description}</p>
             </div>
-            <h3>{input.title}</h3>
-            <div class="number-value">{input.displayValue}</div>
-            <div class="number-units">{input.display_units}</div>
-            <p class="number-summary">{input.summary || input.importanceReason}</p>
-            <div class="number-footer">
-              <span>Used in {input.usedIn?.length || 0} scenarios</span>
-              {input.source_url && (
-                <a href={input.source_url} target="_blank" rel="noreferrer">
-                  Source
-                </a>
-              )}
+
+            <div class="number-grid">
+              {group.inputs.map((input) => (
+                <article class="number-card">
+                  <div class="number-card-top">
+                    <span class="mini-badge">{input.sourceQuality === 'primary' ? 'Primary' : 'Official'}</span>
+                    {input.lastReviewed && <span class="number-meta">Reviewed {input.lastReviewed}</span>}
+                  </div>
+                  <h3>{input.title}</h3>
+                  <div class="number-value">{input.displayValue}</div>
+                  <div class="number-units">{input.display_units}</div>
+                  <p class="number-summary">{input.summary || input.importanceReason}</p>
+                  <div class="number-footer">
+                    <span>Used in {input.usedIn?.length || 0} scenarios</span>
+                    {input.source_url && (
+                      <a href={input.source_url} target="_blank" rel="noreferrer">
+                        Source
+                      </a>
+                    )}
+                  </div>
+                </article>
+              ))}
             </div>
-          </article>
+          </section>
         ))}
       </div>
     </section>
@@ -328,28 +410,24 @@ const ourAsks = [
       </div>
     </section>
 
-    <section id="essay" class="landing-section section-essay">
+    <section id="blogs" class="landing-section section-essay">
       <div class="section-header">
         <p class="section-kicker">Section 3</p>
-        <h2>Essay</h2>
+        <h2>Blogs</h2>
         <p>
-          One forthcoming essay lives here for now: a guided note on the tension between the replacement
-          cost of commissioning new data and the scale of current AI revenue.
+          Working notes and short essays can now live in the markdown content library alongside inputs,
+          scenarios, asks, and key papers.
         </p>
       </div>
 
       <div class="essay-grid">
         <article class="essay-card">
           <div class="essay-header">
-            <span class="mini-badge essay-status">Essay in progress</span>
+            <span class="mini-badge essay-status">{featuredBlog.statusLabel}</span>
             <a href="/#calculations">Open calculator</a>
           </div>
-          <h3>Commissioning a new frontier dataset versus current AI revenue</h3>
-          <p>
-            This note should become a walkthrough of one unresolved tension in the calculator. If we try to
-            pay to commission a new LLM-scale dataset from scratch, the replacement-cost estimate climbs
-            very quickly, while the current public revenue anchors for frontier AI companies remain much smaller.
-          </p>
+          <h3>{featuredBlog.title}</h3>
+          <p>{featuredBlog.excerpt}</p>
 
           <div class="placeholder-metric-grid">
             <div class="placeholder-metric">
@@ -459,14 +537,15 @@ const ourAsks = [
   }
 
   .landing-hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.8fr);
-    gap: 1.5rem;
     padding: 2rem;
     background:
       radial-gradient(circle at 10% 10%, rgba(255, 255, 255, 0.82), transparent 34%),
       linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(247, 249, 252, 0.92)),
       rgba(255, 255, 255, 0.84);
+  }
+
+  .hero-copy {
+    max-width: 820px;
   }
 
   .hero-copy h1 {
@@ -518,35 +597,73 @@ const ourAsks = [
     color: var(--white);
   }
 
-  .hero-stats {
-    display: grid;
-    gap: 0.9rem;
-    align-content: start;
-  }
-
-  .hero-stat {
-    padding: 1rem 1.1rem;
-    border-radius: 20px;
-    border: 1px solid rgba(216, 222, 230, 0.92);
-    background: rgba(255, 255, 255, 0.9);
-  }
-
-  .hero-stat strong {
-    display: block;
-    color: var(--primary-color);
-    font-family: var(--font-heading);
-    font-size: 2rem;
-    line-height: 1;
-  }
-
-  .hero-stat span {
-    color: var(--dark-gray);
-    font-size: 0.92rem;
-  }
-
   .landing-section {
     margin-top: 1.5rem;
     padding: 1.4rem;
+  }
+
+  .input-topic-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.15rem;
+  }
+
+  .input-topic-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.35rem;
+    padding: 0.52rem 0.85rem;
+    border-radius: 999px;
+    border: 1px solid rgba(216, 222, 230, 0.92);
+    color: var(--ink-soft);
+    font-family: var(--font-ui);
+    text-decoration: none;
+    background: rgba(255, 255, 255, 0.88);
+    transition: transform 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  }
+
+  .input-topic-link:hover {
+    transform: translateY(-1px);
+    color: var(--primary-color);
+    border-color: rgba(43, 76, 111, 0.2);
+  }
+
+  .input-topic-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1.15rem;
+  }
+
+  .input-topic-section {
+    padding: 1rem;
+    border-radius: 22px;
+    border: 1px solid rgba(216, 222, 230, 0.92);
+    background:
+      linear-gradient(180deg, rgba(247, 249, 252, 0.58), rgba(255, 255, 255, 0.92)),
+      rgba(255, 255, 255, 0.9);
+  }
+
+  .input-topic-header {
+    display: grid;
+    grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: end;
+    margin-bottom: 0.95rem;
+  }
+
+  .input-topic-kicker {
+    margin-bottom: 0.3rem;
+  }
+
+  .input-topic-header h3 {
+    margin-bottom: 0;
+  }
+
+  .input-topic-header p {
+    margin-bottom: 0;
+    color: var(--ink-soft);
   }
 
   .section-header {
@@ -827,12 +944,9 @@ const ourAsks = [
   }
 
   @media (max-width: 920px) {
-    .landing-hero {
-      grid-template-columns: 1fr;
-    }
-
     .section-header-inline,
-    .watch-grid {
+    .watch-grid,
+    .input-topic-header {
       grid-template-columns: 1fr;
       display: grid;
     }
@@ -855,6 +969,10 @@ const ourAsks = [
     .paper-grid,
     .watch-grid {
       grid-template-columns: 1fr;
+    }
+
+    .input-topic-section {
+      padding: 0.9rem;
     }
   }
 </style>
