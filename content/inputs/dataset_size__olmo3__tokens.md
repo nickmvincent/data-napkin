@@ -13,6 +13,9 @@ importanceRank: 3
 importanceReason: "Adds a current open-model benchmark for training-data scale."
 sourceName: "AllenAI Dolma 3 mix card"
 sourceNote: "AllenAI reports a 5.93T-token mix for the released OLMo 3 7B recipe."
+sourceLocator: "Dataset card summary for the released OLMo 3 7B mix"
+sourceLocatorUrl: 'https://huggingface.co/datasets/allenai/dolma3_mix-6T-1025-7B'
+sourceExcerpt: "The Dolma 3 mix card reports a 5.93T-token recipe for the released OLMo 3 7B model."
 sourceQuality: "official"
 confidence: 0.95
 lastReviewed: "2026-03-10"

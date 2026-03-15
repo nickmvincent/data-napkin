@@ -13,6 +13,9 @@ importanceRank: 12
 importanceReason: "Provides a public benchmark for the scale of a modern code-training corpus."
 sourceName: "The Stack v2 dataset card"
 sourceNote: "The dataset card describes The Stack v2 as a roughly 900B-token code corpus."
+sourceLocator: "Dataset card summary and source-data collection sections"
+sourceLocatorUrl: 'https://huggingface.co/datasets/bigcode/the-stack-v2'
+sourceExcerpt: "The dataset card describes The Stack v2 as a roughly 900B-token corpus with 67.53TB total size and 3.28B unique files."
 sourceQuality: "official"
 confidence: 0.9
 lastReviewed: "2026-03-11"

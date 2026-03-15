@@ -29,7 +29,13 @@ To create a production build:
 npm --prefix website run build
 ```
 
-The built site is written to `website/dist/`.
+The build now runs the strict citation checker before Astro compiles. The built site is written to `website/dist/`.
+
+If you want to run the citation check on its own:
+
+```bash
+npm --prefix website run verify:citations -- --strict
+```
 
 To preview the production build locally:
 
@@ -66,7 +72,7 @@ For code or content changes:
 
 1. Create a branch from the latest default branch.
 2. Make your changes in `content/`, `website/`, or both.
-3. Run `npm --prefix website run build` to verify the site still builds.
+3. Run `npm --prefix website run build` to verify both citations and the site build.
 4. Open a pull request with a clear summary of what changed and why.
 
 If your PR addresses an existing issue, link it in the pull request description.

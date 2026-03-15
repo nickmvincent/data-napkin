@@ -126,6 +126,9 @@ const filteredInputs = computed(() => {
       input.importanceReason,
       input.sourceName,
       input.sourceNote,
+      input.sourceLocator,
+      input.sourceExcerpt,
+      input.derivationNote,
       input.entity ? formatLabel(input.entity) : '',
       input.variable_type ? formatLabel(input.variable_type) : '',
       ...(input.usedIn ?? []).map((scenario) => scenario.title),
@@ -201,6 +204,54 @@ function getSourceLinkLabel(input?: Input | null): string {
   if (!input) return 'Open external source';
 
   return input.sourceName || 'Open external source';
+}
+
+function formatSourceQuality(sourceQuality?: string | null): string {
+  if (!sourceQuality) {
+    return 'Not labeled';
+  }
+
+  return formatLabel(sourceQuality);
+}
+
+function formatConfidence(confidence?: number | null): string | null {
+  if (confidence === undefined || confidence === null || !Number.isFinite(confidence)) {
+    return null;
+  }
+
+  return `${Math.round(confidence * 100)}%`;
+}
+
+function getSourceQualityTone(sourceQuality?: string | null): string {
+  if (sourceQuality === 'assumption' || sourceQuality === 'heuristic') {
+    return 'caution';
+  }
+
+  if (sourceQuality === 'official' || sourceQuality === 'primary') {
+    return 'strong';
+  }
+
+  if (sourceQuality === 'reported' || sourceQuality === 'industry') {
+    return 'moderate';
+  }
+
+  return 'neutral';
+}
+
+function getSourceAvailabilityNote(input?: Input | null): string | null {
+  if (!input || input.source_url) {
+    return null;
+  }
+
+  if (input.sourceQuality === 'assumption') {
+    return 'No external source linked. This is an editable project assumption.';
+  }
+
+  if (input.sourceQuality === 'heuristic') {
+    return 'No external source linked. This is a heuristic benchmark rather than a directly cited public figure.';
+  }
+
+  return 'No external source linked for this input.';
 }
 
 function pluralize(count: number, singular: string, plural = `${singular}s`) {
@@ -1111,6 +1162,15 @@ onBeforeUnmount(() => {
                 >
                   {{ getSourceLinkLabel(selectedInputDetails) }}
                 </a>
+                <a
+                  v-if="selectedInputDetails.sourceLocatorUrl"
+                  class="source-link-chip"
+                  :href="selectedInputDetails.sourceLocatorUrl"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open exact citation
+                </a>
               </div>
 
               <p class="inspector-summary">
@@ -1147,18 +1207,56 @@ onBeforeUnmount(() => {
                 <span class="detail-value">{{ selectedInputDetails.variable_name }}</span>
               </div>
 
-              <div v-if="selectedInputDetails.source_url" class="detail-item">
+              <div v-if="selectedInputDetails.sourceQuality" class="detail-item">
+                <span class="detail-label">Source quality</span>
+                <div class="detail-meta-row">
+                  <span
+                    class="quality-pill"
+                    :data-tone="getSourceQualityTone(selectedInputDetails.sourceQuality)"
+                  >
+                    {{ formatSourceQuality(selectedInputDetails.sourceQuality) }}
+                  </span>
+                  <span v-if="formatConfidence(selectedInputDetails.confidence)" class="detail-meta-copy">
+                    Confidence {{ formatConfidence(selectedInputDetails.confidence) }}
+                  </span>
+                </div>
+              </div>
+
+              <div v-if="selectedInputDetails.source_url || getSourceAvailabilityNote(selectedInputDetails)" class="detail-item">
                 <span class="detail-label">External source</span>
-                <span class="detail-value">
+                <span v-if="selectedInputDetails.source_url" class="detail-value">
                   <a :href="selectedInputDetails.source_url" target="_blank" rel="noreferrer">
                     {{ selectedInputDetails.sourceName || selectedInputDetails.source_url }}
                   </a>
+                </span>
+                <span v-else class="detail-value detail-value-muted">
+                  {{ getSourceAvailabilityNote(selectedInputDetails) }}
                 </span>
               </div>
 
               <div v-if="selectedInputDetails.sourceNote" class="detail-item">
                 <span class="detail-label">Source note</span>
                 <span class="detail-value">{{ selectedInputDetails.sourceNote }}</span>
+              </div>
+
+              <div v-if="selectedInputDetails.sourceLocator" class="detail-item">
+                <span class="detail-label">Exact locator</span>
+                <span class="detail-value">{{ selectedInputDetails.sourceLocator }}</span>
+              </div>
+
+              <div v-if="selectedInputDetails.sourceExcerpt" class="detail-item">
+                <span class="detail-label">Verification excerpt</span>
+                <span class="detail-value detail-value-quote">{{ selectedInputDetails.sourceExcerpt }}</span>
+              </div>
+
+              <div v-if="selectedInputDetails.derivationNote" class="detail-item">
+                <span class="detail-label">Derivation note</span>
+                <span class="detail-value">{{ selectedInputDetails.derivationNote }}</span>
+              </div>
+
+              <div v-if="selectedInputDetails.sourcePublished" class="detail-item">
+                <span class="detail-label">Source date</span>
+                <span class="detail-value">{{ selectedInputDetails.sourcePublished }}</span>
               </div>
 
               <div v-if="selectedInputDetails.lastReviewed" class="detail-item">

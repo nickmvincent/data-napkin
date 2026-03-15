@@ -931,9 +931,60 @@ input[type="number"] {
   font-weight: 700;
 }
 
+.detail-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
 .detail-value {
   color: var(--ink-soft);
   word-break: break-word;
+}
+
+.detail-value-muted,
+.detail-meta-copy {
+  color: var(--dark-gray);
+}
+
+.detail-value-quote {
+  padding: 0.75rem 0.85rem;
+  border-left: 3px solid rgba(179, 90, 30, 0.36);
+  border-radius: 12px;
+  background: rgba(179, 90, 30, 0.06);
+  white-space: pre-wrap;
+}
+
+.quality-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.quality-pill[data-tone='strong'] {
+  background: rgba(58, 112, 82, 0.14);
+  color: #235138;
+}
+
+.quality-pill[data-tone='moderate'] {
+  background: rgba(48, 78, 120, 0.12);
+  color: #29476a;
+}
+
+.quality-pill[data-tone='caution'] {
+  background: rgba(179, 90, 30, 0.14);
+  color: #8d3b14;
+}
+
+.quality-pill[data-tone='neutral'] {
+  background: rgba(33, 43, 54, 0.08);
+  color: var(--ink-soft);
 }
 
 .detail-value a {

@@ -13,6 +13,9 @@ importanceRank: 5
 importanceReason: "Adds a second recent frontier-model disclosure to compare against Llama-family training scale."
 sourceName: "DeepSeek-V3 repository"
 sourceNote: "DeepSeek reports that DeepSeek-V3 was pretrained on 14.8 trillion high-quality and diverse tokens."
+sourceLocator: "README overview bullets and pre-training section"
+sourceLocatorUrl: 'https://github.com/deepseek-ai/DeepSeek-V3#readme'
+sourceExcerpt: "The repository says DeepSeek-V3 was pretrained on 14.8T high-quality and diverse tokens."
 sourceQuality: "official"
 confidence: 0.95
 lastReviewed: "2026-03-11"

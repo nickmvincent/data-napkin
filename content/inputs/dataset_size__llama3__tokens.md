@@ -13,6 +13,9 @@ importanceRank: 1
 importanceReason: "Anchors the scale of a modern frontier pretraining corpus."
 sourceName: "Meta Llama 3 model card"
 sourceNote: "Meta reports that Llama 3 was pretrained on about 15 trillion multilingual tokens."
+sourceLocator: "Model card training-data overview"
+sourceLocatorUrl: 'https://github.com/meta-llama/llama3/blob/main/MODEL_CARD.md'
+sourceExcerpt: "The Llama 3 model card says the model was pretrained on about 15T multilingual tokens."
 sourceQuality: "official"
 confidence: 0.95
 lastReviewed: "2026-03-10"

@@ -17,6 +17,11 @@ export interface Input {
   importanceReason?: string;
   sourceName?: string;
   sourceNote?: string;
+  sourceLocator?: string;
+  sourceLocatorUrl?: string;
+  sourceExcerpt?: string;
+  derivationNote?: string;
+  sourcePublished?: string;
   sourceQuality?: string;
   summary?: string;
   confidence?: number;

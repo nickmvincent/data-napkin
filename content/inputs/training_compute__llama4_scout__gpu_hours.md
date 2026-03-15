@@ -13,6 +13,9 @@ importanceRank: 6
 importanceReason: "Disclosed GPU-hour counts are rare and help connect dataset debates to compute scale."
 sourceName: "Meta Llama 4 model card"
 sourceNote: "Meta reports 5.0 million H100-80GB GPU hours for Llama 4 Scout training."
+sourceLocator: "Training Data section in MODEL_CARD.md"
+sourceLocatorUrl: 'https://github.com/meta-llama/llama-models/blob/main/models/llama4/MODEL_CARD.md#L267-L275'
+sourceExcerpt: "The model card's compute disclosure lists Scout at 5.0M H100-80GB GPU hours."
 sourceQuality: "official"
 confidence: 0.95
 lastReviewed: "2026-03-11"
